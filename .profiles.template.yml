@@ -1,0 +1,35 @@
+###################################################################################################
+### DOCUMENTATION #################################################################################
+###################################################################################################
+#
+#  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+#  !!! NEVER CHECK IN your profiles.yml File !!!
+#  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+#
+#  This is a single-profile fragment, not a full profiles.yml -- `make profile`
+#  appends it to your existing profiles.yml (whatever DBT_PROFILES_DIR points at,
+#  defaulting to ~/.dbt) rather than overwriting the file, since that file is
+#  commonly shared with other dbt projects on the same machine.
+#
+#  integration_tests/dbt_project.yml hardcodes `profile: 'dbt_tripwire_poc'` --
+#  this block's top-level key must match that exactly.
+
+dbt_tripwire_poc:
+  target: sandbox
+  outputs:
+    sandbox:
+      # Get the account identifier from snowflake ui > click username > account > account name > copy account locator.
+      account: "{{ACCOUNT_IDENTIFIER}}"
+      # This role is used by dbt to build/test data in snowflake.
+      role: "{{WS_ROLE}}"
+      # [user-email]@yourcompany.com
+      user: "{{USER_EMAIL}}"
+      # Change to your workspace schema, e.g. WS_[first-initial][last-name]_SAO_POC --
+      # keep this isolated from your normal workspace schema so integration test
+      # runs don't collide with unrelated work.
+      schema: "{{WS_SCHEMA}}"
+      authenticator: externalbrowser
+      database: workspace
+      threads: 4
+      type: snowflake
+      warehouse: develop

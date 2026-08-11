@@ -1,0 +1,13 @@
+version: 2
+
+sources:
+  - name: sao_poc
+    database: "{{ target.database }}"
+    schema: "{{ target.schema }}"
+    tables:
+      - name: SAO_POC_SOURCE_A
+        meta:
+          sao_watermark_col: LOADED_AT
+      - name: SAO_POC_SOURCE_B
+        meta:
+          sao_watermark_col: LOADED_AT
