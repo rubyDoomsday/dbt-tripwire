@@ -1,0 +1,13 @@
+dbt_tripwire_poc:
+  target: ci
+  outputs:
+    ci:
+      type: snowflake
+      account: ci-placeholder
+      user: ci-placeholder
+      role: ci-placeholder
+      authenticator: externalbrowser
+      database: ci_placeholder
+      warehouse: ci_placeholder
+      schema: ci_placeholder
+      threads: 1

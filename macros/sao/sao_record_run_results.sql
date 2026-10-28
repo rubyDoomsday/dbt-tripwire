@@ -1,35 +1,10 @@
-{#
-    The ONLY writer of persistent state (SAO_MODEL_STATE / SAO_SOURCE_STATE).
-    Wired into the consuming project's on-run-end hook list (packages can't
-    inject project-level hooks automatically -- see design doc "Scope").
-
-    Four-way branch, driven by joining dbt's own `results` against this
-    invocation's SAO_RUN_LOG rows (which is exactly "which SAO-managed models
-    were evaluated, and what did we decide" -- restricting the MERGE source
-    to models that have a SAO_RUN_LOG row for this invocation_id naturally
-    scopes this to SAO-managed models only, with no separate config check
-    needed):
-      - result status success/pass AND SHOULD_RUN = true  -> ran for real:
-        LAST_RUN_AT = now(), SKIP_COUNT = 0, LAST_ERROR_AT cleared
-      - result status success/pass AND SHOULD_RUN = false -> no-op'd:
-        SKIP_COUNT += 1 (atomically, in the MERGE's SQL -- never
-        read-then-increment in Jinja, which races under concurrent
-        invocations)
-      - result status error -> LAST_ERROR_AT = now(); LAST_RUN_AT/SKIP_COUNT
-        left completely untouched (a failed run is still never silently
-        counted as a legitimate skip), but this forces Tier 0's
-        previous_run_errored rule to fire on this model's very next
-        invocation -- see sao_tier0.sql for why the source-level baseline
-        alone can't be trusted to force this model's retry.
-      - anything else (skipped / not reached -- i.e. this invocation never
-        actually attempted the real materialization for this model, usually
-        because an upstream node failed first) -> row untouched entirely,
-        and correctly so: since sao_should_run() is the literal first
-        statement inside the materialization body, a node dbt skips outright
-        never even wrote a SAO_RUN_LOG row this invocation, so the inner
-        joins below naturally exclude it from both branches.
-#}
 {% macro sao_record_run_results(results) %}
+    {#- Must stay the literal first check -- keeps this hook's enable/disable
+        decision identical to sao_should_run()'s, regardless of how a
+        consumer wires the on-run-end hook. -#}
+    {% if dbt_tripwire.sao_is_globally_disabled() %}
+        {{ return(none) }}
+    {% endif %}
     {% if execute and results | length > 0 %}
         {%- set ns = namespace(success_ids=[], errored_ids=[]) -%}
         {% for res in results %}

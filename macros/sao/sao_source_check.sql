@@ -1,29 +1,11 @@
-{#
-    Tier 1/2 source-anchored checks, with the mandatory per-invocation cache
-    (SAO_SOURCE_CHECK_LOG). See design doc "Risks" -- this cache is not
-    optional, it's the central lesson of round-4 review.
-
-    Cache correctness relies on the transient SAO_SOURCE_CHECK_LOG table
-    itself (queried via SQL), not on any in-process/in-memory memoization --
-    that's deliberate: dbt runs multi-threaded, so an in-memory Jinja/Python
-    dict would not be reliably shared across threads. Two threads racing to
-    check the same uncached source in the same moment may both compute it
-    independently before either writes its cache row -- harmless duplicate
-    work per the design doc, not a correctness problem.
-#}
+{#- Cache correctness relies on the transient SAO_SOURCE_CHECK_LOG table
+    itself, not in-memory memoization -- dbt runs multi-threaded. -#}
 
 {% macro sao_get_source_relation(source_id) %}
     {%- set snode = graph.sources[source_id] -%}
     {{ return(api.Relation.create(database=snode.database, schema=snode.schema, identifier=snode.identifier)) }}
 {% endmacro %}
 
-{#- Optional per-source watermark column, surfaced via `meta.sao_watermark_col`
-    on the source table in sources.yml. Sources with no watermark column
-    configured fall back to COUNT(*)-only Tier 2, same as before. Validated
-    against an identifier allowlist before it's ever interpolated into SQL
-    (see sao_validate_identifier in sao_config.sql) -- this value ends up
-    unquoted inside a min()/max() expression, so it gets the same treatment
-    build_after_interval_unit already gets. -#}
 {% macro sao_get_source_watermark_col(source_id) %}
     {%- set snode = graph.sources[source_id] -%}
     {%- set meta = snode.get('meta', {}) or {} -%}
@@ -34,15 +16,7 @@
     {{ return(col) }}
 {% endmacro %}
 
-{#-
-    Tier 2 scan: COUNT(*), plus MIN/MAX(watermark_col) when a watermark
-    column is configured for this source. Returns a dict with row_count
-    (always) and min_watermark/max_watermark (none if not configured).
-    Watermark values are cast to varchar before being read back, so the
-    later baseline comparison is a stable string compare rather than
-    comparing whatever native Python type the driver happens to deserialize
-    a variant/timestamp column into.
--#}
+{#- Watermark cast to varchar for a stable string compare against the baseline. -#}
 {% macro sao_scan_source_metrics(relation, watermark_col) %}
     {% if watermark_col %}
         {%- set result = run_query(
@@ -55,7 +29,6 @@
     {% endif %}
 {% endmacro %}
 
-{#- Look up this invocation's cached check result for one source, if any. -#}
 {% macro sao_get_cached_source_check(source_id) %}
     {%- set query -%}
         select SIGNAL_FOUND, CHECKED_TIER
@@ -72,17 +45,6 @@
     {% endif %}
 {% endmacro %}
 
-{#-
-    Tier 1: SYSTEM$LAST_CHANGE_COMMIT_TIME() against the true source -- no
-    scan. Tier 2 (only if Tier 1 found no signal, including when Tier 1's
-    baseline is missing on the very first check for this source, or when
-    Snowflake returns null for a source with no change-tracking metadata):
-    COUNT(*) against the same source -- requires a scan.
-
-    Persists the freshly observed values into SAO_SOURCE_CHECK_LOG
-    (append-only insert) for later batched merge into SAO_SOURCE_STATE at
-    on-run-end, regardless of which tier ultimately fired.
--#}
 {% macro sao_check_source_uncached(source_id) %}
     {%- set relation = dbt_tripwire.sao_get_source_relation(source_id) -%}
     {%- set watermark_col = dbt_tripwire.sao_get_source_watermark_col(source_id) -%}
@@ -108,24 +70,9 @@
 
     {%- set ns = namespace(signal_found=none, tier=none, current_row_count=none, current_min_watermark=none, current_max_watermark=none) -%}
 
-    {#- Whenever Tier 1 fires -- whether because there's no baseline yet (true
-        first check) or because the commit-time moved since the last baseline
-        (real change, OR a spurious one-off metadata shift; Snowflake's
-        SYSTEM$LAST_CHANGE_COMMIT_TIME is documented as not fully reliable for
-        very small tables and was observed during POC testing to shift once
-        with no real DML involved) -- also capture the current Tier 2 metrics
-        (ROW_COUNT, and MIN/MAX watermark if configured) and persist them as
-        this invocation's Tier 2 baseline. Without this, the Tier 2 baseline
-        stays stale (or NULL) in SAO_SOURCE_STATE until some future
-        invocation happens to fall through to the Tier 2 branch, at which
-        point it would compare the current values against a stale/NULL
-        baseline and (for the NULL case) a comparison against None always
-        evaluates true -- a guaranteed false-positive signal on that source's
-        next "Tier 1 stable" invocation, indistinguishable from a real
-        change. Piggybacking the scan onto an already-expensive
-        Tier-1-fires check (which is already driving a model rebuild) costs
-        one extra scan per source, only on invocations that were rebuilding
-        anyway. -#}
+    {#- Whenever Tier 1 fires, also capture Tier 2 metrics as this invocation's
+        baseline -- otherwise a stale/NULL baseline guarantees a false-positive
+        signal on a later Tier 2 check. -#}
     {% if not has_baseline %}
         {%- set ns.signal_found = true -%}
         {%- set ns.tier = 'TIER1' -%}
@@ -141,7 +88,6 @@
         {%- set ns.current_min_watermark = metrics.min_watermark -%}
         {%- set ns.current_max_watermark = metrics.max_watermark -%}
     {% else %}
-        {#- Tier 1 found no signal (either unchanged, or null/unavailable) -> fall to Tier 2 -#}
         {%- set metrics = dbt_tripwire.sao_scan_source_metrics(relation, watermark_col) -%}
         {%- set ns.current_row_count = metrics.row_count -%}
         {%- set ns.current_min_watermark = metrics.min_watermark -%}
@@ -156,7 +102,7 @@
 
     {%- set insert_sql -%}
         insert into {{ dbt_tripwire.sao_source_check_log_relation() }}
-            (INVOCATION_ID, SOURCE_ID, SIGNAL_FOUND, CHECKED_TIER, LAST_CHANGE_COMMIT_TIME, ROW_COUNT, MIN_WATERMARK, MAX_WATERMARK)
+            (INVOCATION_ID, SOURCE_ID, SIGNAL_FOUND, CHECKED_TIER, LAST_CHANGE_COMMIT_TIME, ROW_COUNT, MIN_WATERMARK, MAX_WATERMARK, CHECKED_AT)
         select
             '{{ invocation_id }}',
             '{{ source_id }}',
@@ -165,7 +111,8 @@
             {{ current_commit_time if current_commit_time is not none else 'null' }},
             {{ ns.current_row_count if ns.current_row_count is not none else 'null' }},
             {{ "to_variant('" ~ (ns.current_min_watermark | replace("'", "''")) ~ "')" if ns.current_min_watermark is not none else 'null' }},
-            {{ "to_variant('" ~ (ns.current_max_watermark | replace("'", "''")) ~ "')" if ns.current_max_watermark is not none else 'null' }}
+            {{ "to_variant('" ~ (ns.current_max_watermark | replace("'", "''")) ~ "')" if ns.current_max_watermark is not none else 'null' }},
+            current_timestamp()
     {%- endset -%}
     {% do run_query(insert_sql) %}
 
@@ -180,14 +127,8 @@
     {{ return(dbt_tripwire.sao_check_source_uncached(source_id)) }}
 {% endmacro %}
 
-{#-
-    Root source check: collect all true sources reachable from `model_id`,
-    check each (cache-first), and fire true if ANY shows a signal at either
-    tier. Every reachable source is checked (no short-circuit) so the shared
-    per-invocation cache stays warm for every other model touching the same
-    sources this run, and so SAO_SOURCE_STATE gets refreshed for all of them
-    at on-run-end regardless of which source ultimately drove the decision.
--#}
+{#- No short-circuit: keeps the shared per-invocation cache warm for other
+    models, and refreshes SAO_SOURCE_STATE for every reachable source. -#}
 {% macro sao_check_root_sources(model_id) %}
     {%- set source_ids = dbt_tripwire.sao_collect_reachable_sources(model_id) -%}
     {% if source_ids | length == 0 %}

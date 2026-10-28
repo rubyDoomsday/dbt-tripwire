@@ -25,17 +25,25 @@
     within the package's own files). So this override has to live here, in
     the consuming project, not in dbt_tripwire/macros/.
 
-    This is a straight copy of dbt-core's is_incremental() with the single
-    line changed to also accept 'sao_incremental'.
+    Rather than freeze a copy of dbt-core's implementation (which would
+    silently drift out of sync with whatever dbt-core version this project
+    has installed on every dbt-core upgrade), this only special-cases
+    'sao_incremental' and falls through to dbt-core's real is_incremental()
+    for every other materialization, via the `dbt.` global-project
+    namespace (dbt namespaces its own built-in macros under the literal
+    package name `dbt`).
 -#}
 {% macro is_incremental() %}
-    {% if not execute %}
-        {{ return(False) }}
+    {% if model.config.materialized == 'sao_incremental' %}
+        {% if not execute %}
+            {{ return(False) }}
+        {% else %}
+            {% set relation = adapter.get_relation(this.database, this.schema, this.table) %}
+            {{ return(relation is not none
+                      and relation.type == 'table'
+                      and not should_full_refresh()) }}
+        {% endif %}
     {% else %}
-        {% set relation = adapter.get_relation(this.database, this.schema, this.table) %}
-        {{ return(relation is not none
-                  and relation.type == 'table'
-                  and model.config.materialized in ['incremental', 'sao_incremental']
-                  and not should_full_refresh()) }}
+        {{ return(dbt.is_incremental()) }}
     {% endif %}
 {% endmacro %}

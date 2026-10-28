@@ -1,0 +1,42 @@
+# see: https://pre-commit.com/#usage
+# If you want to manually run all pre-commit hooks on a repository, run
+# pre-commit run --all-files. To run individual hooks use pre-commit run <hook_id>.
+
+default_install_hook_types:
+  - pre-commit
+  - pre-push
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: requirements-txt-fixer
+      - id: check-yaml
+      - id: end-of-file-fixer
+        stages: [pre-commit, pre-push]
+      - id: trailing-whitespace
+        stages: [pre-commit, pre-push]
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: integration_tests/package-lock\.yml
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.1
+    hooks:
+      - id: codespell
+
+  - repo: local
+    hooks:
+      - id: dbt-parse
+        name: dbt parse (integration_tests)
+        entry: >-
+          bash -c '[ -x .venv/bin/dbt ] || { echo "No .venv/bin/dbt found. Run make bootstrap first."; exit 1; };
+          export PATH="$PWD/.venv/bin:$PATH"; cd integration_tests && dbt deps --quiet && dbt parse --quiet'
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push, manual] # pre-push local, manual = ci (code-compliance.yml)
