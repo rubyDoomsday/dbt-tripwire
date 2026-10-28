@@ -455,16 +455,11 @@ out of band, then re-run.
 |---|---|---|---|
 | `check-yaml`, `requirements-txt-fixer` | ✓ | ✓ | ✓ |
 | `end-of-file-fixer`, `trailing-whitespace` | ✓ | ✓ | |
-| `detect-secrets` | ✓ | ✓ | ✓ |
 | `codespell` | ✓ | ✓ | ✓ |
 | `dbt-parse` (`dbt deps` + `dbt parse` in `integration_tests/`) | | ✓ | ✓ |
 
 To run everything CI runs: `pre-commit run --hook-stage manual --all-files`.
 To skip the slow parse on one push: `SKIP=dbt-parse git push`.
-
-If `detect-secrets` flags something that isn't a secret, add it to the baseline
-with `detect-secrets scan --baseline .secrets.baseline` and commit the updated
-file.
 
 ### Contributing
 

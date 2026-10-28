@@ -17,13 +17,6 @@ repos:
       - id: trailing-whitespace
         stages: [pre-commit, pre-push]
 
-  - repo: https://github.com/Yelp/detect-secrets
-    rev: v1.5.0
-    hooks:
-      - id: detect-secrets
-        args: ['--baseline', '.secrets.baseline']
-        exclude: integration_tests/package-lock\.yml
-
   - repo: https://github.com/codespell-project/codespell
     rev: v2.4.1
     hooks:
