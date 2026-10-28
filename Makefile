@@ -17,13 +17,13 @@ help:
 # Main Operations
 ###################################################################################################
 
-bootstrap: _python_environment _external_dependencies _profile _dbt_dependencies _exit_message
+bootstrap: _python_environment _external_dependencies _profile _dbt_dependencies _pre_commit_install _exit_message
 
 update: _dbt_clean _dbt_dependencies _exit_message
 
 profile: _profile
 
-destroy: _dbt_clean
+destroy: _dbt_clean _pre_commit_uninstall
 	-rm -r $(VENV)
 	-pyenv local --unset
 	-pyenv uninstall $(PYTHON_VERSION)
@@ -91,6 +91,12 @@ _dbt_clean: _venv
 
 _dbt_dependencies: _venv
 	cd $(INTEGRATION_TESTS) && $(DBT) deps
+
+_pre_commit_install: _venv
+	$(VENV)/bin/pre-commit install
+
+_pre_commit_uninstall:
+	-$(VENV)/bin/pre-commit uninstall -t pre-commit -t pre-push
 
 _exit_message:
 	$(info ----------)

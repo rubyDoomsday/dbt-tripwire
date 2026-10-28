@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: cut release
+        run: |
+          strict='^v[0-9]+\.[0-9]+\.[0-9]+$'
+          if git tag --points-at HEAD | grep -qE "$strict"; then
+            echo "HEAD is already released, nothing to do"
+            exit 0
+          fi
+
+          latest=$(git tag -l --merged HEAD | grep -E "$strict" | sort -V | tail -n1 || true)
+          range=${latest:+$latest..}HEAD
+          IFS=. read -r major minor patch <<< "${latest:-v0.0.0}"
+          major=${major#v}
+
+          prs=""
+          for sha in $(git rev-list --first-parent "$range"); do
+            found=""
+            for _ in 1 2 3; do
+              found=$(gh api "repos/$GH_REPO/commits/$sha/pulls" --jq '.[] | select(.merged_at != null) | .number') || found=""
+              if [ -n "$found" ]; then break; fi
+              sleep 10
+            done
+            if [ -z "$found" ]; then
+              echo "::warning::$sha is not linked to a merged PR, so it can't change the bump"
+            fi
+            prs="$prs $found"
+          done
+          prs=$(echo $prs | tr ' ' '\n' | sed '/^$/d' | sort -un)
+          if [ -z "$prs" ] && [ -n "$latest" ]; then
+            echo "::error::No merged PRs found in $range"
+            exit 1
+          fi
+
+          bump="patch"
+          if [ -z "$latest" ]; then bump=minor; fi
+          upgrade=""
+          for pr in $prs; do
+            labels=$(gh pr view "$pr" --json labels --jq '.labels[].name')
+            if echo "$labels" | grep -qx 'release:major'; then
+              bump=major
+              steps=$(gh pr view "$pr" --json body --jq .body | awk -f .github/scripts/upgrade-steps.awk | sed '/./,$!d')
+              if [ -n "$steps" ]; then
+                upgrade="$upgrade"$'\n\n'"From #$pr:"$'\n\n'"$steps"
+              else
+                echo "::warning::#$pr is labeled release:major but has no Upgrade steps section"
+              fi
+            elif echo "$labels" | grep -qx 'release:minor' && [ "$bump" = patch ]; then
+              bump=minor
+            fi
+          done
+
+          case "$bump" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          version="v$major.$minor.$patch"
+
+          args=(--target "$GITHUB_SHA" --title "$version" --generate-notes)
+          if [ -n "$upgrade" ]; then
+            args+=(--notes "## Upgrade steps$upgrade")
+          fi
+          echo "Cutting $version ($bump) from PRs: ${prs//$'\n'/ }"
+          gh release create "$version" "${args[@]}"

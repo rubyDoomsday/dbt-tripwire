@@ -1,9 +1,8 @@
-# Pinned to the exact versions this package's macros are verified against
-# (see 2026-07-17-dbt-tripwire-design.md and macro comments referencing
-# dbt-core 1.10.13 / dbt-snowflake 1.10.6 behavior).
+# Required for Snowflake key pair authentication
+cryptography>=41.0.0
+# Pinned to the versions this package's macros are verified against.
 # NOTE: if/when updating the dbt-core version be sure to update dbt-snowflake as well
 dbt-core==1.10.13
 # NOTE: if/when updating the dbt-snowflake version be sure to update dbt-core above
 dbt-snowflake==1.10.6
-# Required for Snowflake key pair authentication
-cryptography>=41.0.0
+pre-commit==3.8.0

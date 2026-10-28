@@ -1,0 +1,92 @@
+name: Release Label
+
+on:
+  pull_request:
+    types: [opened, reopened, edited, labeled, unlabeled]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: release-label-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  label:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: ensure release labels exist
+        run: |
+          existing=$(gh label list --limit 200 --json name --jq '.[].name')
+          create() {
+            if ! echo "$existing" | grep -qx "$1"; then
+              gh label create "$1" --color "$2" --description "$3"
+            fi
+          }
+          create release:patch 0E8A16 "Cuts a patch release on merge (default for every PR)"
+          create release:minor FBCA04 "Cuts a minor release on merge: new opt-in capability"
+          create release:major B60205 "Cuts a major release on merge: consumers must change something"
+
+      - name: apply release:patch
+        run: |
+          if ! gh pr view "$PR" --json labels --jq '.labels[].name' | grep -qx 'release:patch'; then
+            gh pr edit "$PR" --add-label release:patch
+          fi
+
+      - name: update reminder comment
+        run: |
+          marker='<!-- dbt-tripwire-release-label -->'
+          labels=$(gh pr view "$PR" --json labels --jq '.labels[].name')
+          has() { echo "$labels" | grep -qx "$1"; }
+
+          bump="patch"
+          if has release:minor; then bump=minor; fi
+          if has release:major; then bump=major; fi
+
+          {
+            echo "$marker"
+            echo "Merging this PR will cut a **$bump** release."
+            echo
+            if has release:minor && has release:major; then
+              echo "> [!WARNING]"
+              echo "> Both \`release:minor\` and \`release:major\` are on this PR. Major wins. Remove the one that doesn't apply."
+              echo
+            fi
+            if has release:major; then
+              steps=$(gh pr view "$PR" --json body --jq .body | awk -f .github/scripts/upgrade-steps.awk)
+              if [ -z "$steps" ]; then
+                echo "> [!WARNING]"
+                echo "> This PR is labeled \`release:major\` but the description has no \`## Upgrade steps\` section yet. Uncomment the one in the PR template and fill it in. It gets copied into the release notes."
+                echo
+              fi
+            fi
+            echo "Every PR gets \`release:patch\` automatically. If this change is bigger than a patch, add a label:"
+            echo
+            echo "| Label | Use it when |"
+            echo "|---|---|"
+            echo "| \`release:patch\` | Bug fix, docs, or CI. Nothing changes for anyone using the package. |"
+            echo "| \`release:minor\` | It adds something new that's off by default, like a new config key or macro. |"
+            echo "| \`release:major\` | Anyone using the package has to change something to upgrade: new wiring, a renamed or dropped \`SAO_*\` column, a config key that now means something different, or different default skip behavior. Fill in \`## Upgrade steps\` in the description too. |"
+            echo
+            echo "The highest label wins. See [Versioning](https://github.com/$GH_REPO/blob/main/README.md#versioning) for the full rules."
+          } > comment.md
+
+          id=$(gh api --paginate "repos/$GH_REPO/issues/$PR/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$marker\"))) | .id" | head -n1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GH_REPO/issues/comments/$id" -F body=@comment.md > /dev/null
+          else
+            gh pr comment "$PR" --body-file comment.md
+          fi

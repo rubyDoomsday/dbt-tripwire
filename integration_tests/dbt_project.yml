@@ -1,5 +1,4 @@
 name: 'sao_integration_tests'
-version: '1.0.0'
 config-version: 2
 profile: 'dbt_tripwire_poc'
 
@@ -10,13 +9,8 @@ clean-targets: ["target", "dbt_packages"]
 on-run-end:
   - "{{ dbt_tripwire.sao_record_run_results(results) }}"
 
-# Do NOT set `sao_disable` here, even to `false`. var() only falls through to
-# env_var('DBT_SAO_DISABLE', ...) when the var key is entirely absent from
-# `vars` -- setting it explicitly, at any value, permanently shadows the
-# DBT_SAO_DISABLE env var for every invocation of this project. This project
-# used to set `sao_disable: false` here "for clarity," which silently broke
-# the env-var kill switch. Leave it unset; the package default is already
-# `false` (see sao_config.sql: sao_is_globally_disabled()).
+# Do NOT set sao_enable/sao_disable here, even to false -- permanently
+# shadows the env var. Leave unset; export DBT_ENABLE_SAO=true instead.
 
 models:
   sao_integration_tests:

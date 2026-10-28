@@ -1,0 +1,29 @@
+name: Code Compliance
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      DBT_PROFILES_DIR: ${{ github.workspace }}/.github/ci_profiles
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.9'
+
+      - name: pip install
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements.txt
+
+      - name: pre-commit
+        run: .venv/bin/pre-commit run --hook-stage manual --all-files --show-diff-on-failure
